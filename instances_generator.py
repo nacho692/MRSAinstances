@@ -25,10 +25,10 @@ import numpy as np
 import math
 
 __author__ = "Marcelo Bianchetti"
-__credits__ = ["Marcelo Bianchetti"]
-__version__ = "1.2.1"
-__maintainer__ = "Marcelo Bianchetti"
-__email__ = "mbianchetti at dc.uba.ar"
+__credits__ = ["Marcelo Bianchetti", "Ignacio Mariotti"]
+__version__ = "1.0.0"
+__maintainer__ = "Ignacio Mariotti"
+__email__ = "mariotti.ignacio at dc.uba.ar"
 __status__ = "Production"
 
 line_enter = '{}\n'
@@ -70,7 +70,7 @@ def calculateMaxNumberOfDemands(n, m, S, max_sd):
         nodes but we want infeasible instances too.
     '''
     d = calculateGraphDensity(n, m)
-    max_n_of_demands = int((n-1.) * d * S/(max_sd/2.))
+    max_n_of_demands = int((n-1.) * d * S/(max_sd))
     return max_n_of_demands
 
 
@@ -102,12 +102,13 @@ if __name__ == "__main__":
     parser.add_argument("-p", "--percents", nargs='+', type=float,
                         help="List of maximum percentage of total available "
                              "slots that a demand can use. Must be in (0, 1].")
-    parser.add_argument("-d", "--density", type=float, default=1.0,
+    parser.add_argument("-d", "--density", type=float, default=2.0,
                         help="Density factor. The maximum amount of demands is"
-                        " multiplied by this factor. Default is 1.0")
-    parser.add_argument("-m", "--multiple", action="store_true", help="If set,"
-                        " multiple demands between a source and a destination"
-                        " are allowed.")
+                        " multiplied by this factor. Default is 2.0.")
+    parser.add_argument("-sp", "--spread", nargs='+', type=float, default=[1.0],
+                        help="Spread factor. The higher the spread, the more "
+                        "distributed are terminals between demands. "
+                        "Must be in (0, 1]). Default is 1.0.")
     args = parser.parse_args()
 
     main_dir = (os.path.dirname(os.path.abspath(__file__))
@@ -126,7 +127,7 @@ if __name__ == "__main__":
         if not os.path.exists(d):
             error("Directory '{}' not found.".format(d))
 
-    instance_fname = 'instance_{}_{}_{}_{}.txt'
+    instance_fname = 'instance_{}_{}_{}_{}_{}.txt'
 
     random.seed(args.seed)
 
@@ -144,6 +145,8 @@ if __name__ == "__main__":
                                           if args.percents is None else
                                           [p for p in set(args.percents)
                                            if p > 0 and p <= 1])
+    
+    spreads = [sp for sp in set(args.spread) if 0 < sp <= 1]
 
     # Creation of instances directory if it does not exist
     if not os.path.exists(instances_dir):
@@ -173,16 +176,16 @@ if __name__ == "__main__":
                 os.makedirs(top_dir)
 
             # Iterates over each available S
-            for S in avaliable_S:
+            for S, sp in [(S, sp) 
+                          for S in avaliable_S 
+                          for sp in spreads]:
                 max_sd = math.ceil(percentage * S)
 
-                max_nD = calculateMaxNumberOfDemands(n, m, S, max_sd)
-                max_nD = int(max(1, max_nD * args.density))
-                nD = random.randint(int(max_nD/2), max_nD)
-
+                nT = calculateMaxNumberOfDemands(n, m, S, max_sd)
+                nT = int(max(1, nT * args.density))
                 demand_f = os.path.join(
                     top_dir, instance_fname.format(
-                        top_name, S, max_sd, nD))
+                        top_name, S, max_sd, nT, str(sp)))
 
                 with open(demand_f, 'w') as out:
                     out.write('# Created by {}\n'.format(__author__))
@@ -190,21 +193,39 @@ if __name__ == "__main__":
                     out.write('# Seed: {}\n'.format(args.seed))
                     out.write('# Format:\n')
                     out.write('#   First line: S  |D|\n')
-                    out.write('#   Other lines: <src\tdst\t#slots>\n')
+                    out.write('#   Other lines: <src #dst dst_1 dst_2 ... dst_#dst #slots>\n')
 
+                    remainingT = nT
+                    spInv = math.pow(sp, -1)
+
+                    lines = []
+                    nD = 0
+                    while remainingT > 0:
+                        nD += 1
+                        [src] = random.sample(range(n), 1)
+
+                        nDst = 1
+                        if spInv - 1 > 0.001:
+                            nDst = math.ceil(random.uniform(0.5*spInv, 2*spInv))
+
+                        nDst: int = min(remainingT, nDst)
+                        nDst = min(n-1,nDst)
+                        remainingT = remainingT - nDst
+                        dsts = random.sample(
+                            [dst for dst in range(n) if dst != src], 
+                            nDst)
+
+                        s = random.randint(math.floor(max_sd/2), max_sd)
+                        s = max(1, s)
+                        
+                        line = '{src}{sep}{nDst}{sep}{dst}{sep}{s}'.format(
+                            S=S, sep=sep, src=src, nDst=nDst, 
+                            dst=sep.join(map(str, dsts)),
+                            s=s)
+                        lines.append(line_enter.format(line))
+                    
                     line = '{}{}{}'.format(S, sep, nD)
                     out.write(line_enter.format(line))
 
-                    # Stores the dict src --> dst to not allow repeated
-                    # pairs when 'multiple' is disabled
-                    used_pair = None if args.multiple else {}
-                    for _ in range(nD):
-                        src, dst = getPair(n)
-
-                        if not args.multiple:
-                            used_pair[src] = dst
-
-                        s = random.randint(1, max_sd)
-                        line = '{src}{sep}{dst}{sep}{s}'.format(
-                            S=S, sep=sep, src=src, dst=dst, s=s)
-                        out.write(line_enter.format(line))
+                    for line in lines:
+                        out.write(line)
